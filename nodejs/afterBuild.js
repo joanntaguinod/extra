@@ -1,4 +1,7 @@
 /**
+ * IMPORTANT: 
+ *  Script is using `fs-extra` package to copy file
+ * 
  * What it does:
  *  Changes the base href value in index.html after building/running:
  *      $ ng build --prod --env=sit
@@ -8,32 +11,54 @@
  *  Run this nodejs script after building:
  *      $ node afterBuild.js <...arguments> 
  *  Sample:
- *      $ node afterBuild.js 20140 true 
+ *      $ node afterBuild.js 20140 true true
  * 
  * Parameters (in order):
  *  baseHref - (string, required) Base href new value. Do not include slashes, no need for quotes.
  *  deleteNoto - (boolean, optional) Deletes Noto font folder for smaller build.
- * 
+ *  zipDist - (boolean, optional) Makes a copy of the /dist folder, 
+ *              renames it to `baseHref` value then zips it
  */
+
+// IMPORTANT:
+
 
 //PROPS
 const distFileName = './dist/index.html';
+const distPath = './dist/';
 const notoFilePath = './dist/assets/fonts/noto';
+
 let validBaseRef = "";
 let deleteNoto = false;
+let zipDist = false;
 
+let dontCopy = false;    //if fs-extra is not installed
 
 //IMPORTS
 var readline = require('readline');
-var fs = require('fs');
 var rimraf = require('rimraf');
 
+var fs;   //CATCH UNINSTALLED PACKAGES
+try {
+    isFsExtraInstalled = require.resolve("fs-extra");
+    if (!fs) {
+        fs = require('fs');
+        dontCopy = true;
+    }
+    fs = require('fs-extra');
+
+} catch (e) {
+    console.error("`fs-extra` is not found. Using `fs` instead.\nZipping build is not allowed.");
+    fs = require('fs');
+}
 
 //GET COMMAND LINE INPUT
-//Arguments[]: node, filename, baseHref, deleteNoto?
+//Arguments[]: node, filename, baseHref, deleteNoto?, zipDist?
 const argsLength = process.argv.length;
 if (argsLength >= 3) {
     deleteNoto = !!process.argv[3] ? !!process.argv[3] : false;
+    zipDist = !!process.argv[4] ? !!process.argv[4] : false;
+
     if (checkBaseHrefValue(process.argv[2])) {
         readFile(validBaseRef);
     }
@@ -79,46 +104,62 @@ function checkBaseHrefValue(input) {
 }
 
 function readFile(baseHref) {
-    fs.readFile(distFileName, 'utf8', function (err, data) {
-        if (err) {
-            return function () {
-                console.log(err);
-                rl.close();
-            };
-        }
 
-        if (!data) {
-            outputError("Empty index.html file!");
-        }
+    fs.stat(distFileName, function (error, stats) {
+        fs.open(distFileName, "r", function (error, fd) {
+            var buffer = new Buffer(stats.size);
+            fs.read(fd, buffer, 0, buffer.length, null, (err, bytesRead, buffer) => {
 
-        // let emptyBaseHrefRegex = /\<base href=\"\/\"\>/g;
-        let baseHrefRegex = /\<base href=\"[-a-zA-Z0-9@:%_\+.~#?&\/\/=]*\"\>/g;
-        let newBaseHref = "<base href=\"/" + baseHref + "/\">";
+                    if (err) {
+                        return function () {
+                            console.log(err);
+                            rl.close();
+                        };
+                    }
 
-        if (!baseHrefRegex.test(data)) {
-            outputError("Cannot find empty base href.");
-            return;
-        };
+                    let data = buffer.toString("utf8");
+                    console.log(data);
 
-        const updatedData = data.replace(baseHrefRegex, newBaseHref);
+                    if (!data) {
+                        outputError("Empty index.html file!");
+                    }
 
-        fs.writeFile(distFileName, updatedData, 'utf8', function (err) {
-            if (err) return function () {
-                console.log(err);
-                rl.close();
-            };
+                    // let emptyBaseHrefRegex = /\<base href=\"\/\"\>/g;
+                    let baseHrefRegex = /\<base href=\"[-a-zA-Z0-9@:%_\+.~#?&\/\/=]*\"\>/g;
+                    let newBaseHref = "<base href=\"/" + baseHref + "/\">";
 
-            //OPTIONAL
-            if (deleteNoto) {
-                rimraf(notoFilePath, function () {
-                    console.log('Done deleting Noto folder.');
-                    rl.close();
+                    if (!baseHrefRegex.test(data)) {
+                        outputError("Cannot find empty base href.");
+                        return;
+                    };
+
+                    const updatedData = data.replace(baseHrefRegex, newBaseHref);
+
+                    fs.writeFile(distFileName, updatedData, 'utf8', function (err) {    //TODO: Update this. Make use of `.then()`
+                        if (err) return outputError(err);
+
+                        //OPTIONAL
+                        if (deleteNoto) {
+                            rimraf(notoFilePath, function (err) {
+                                if (err) return outputError(err);
+
+                                console.log('Deleted Noto folder.');
+
+                                if (zipDist) {
+                                    fs.copy(distPath, './' + validBaseRef, err => {
+                                        if (err) return outputError(err);
+
+                                        console.log('Finished building. Ready to deploy! =)) ');
+                                        rl.close();
+                                    });
+                                }
+                            });
+                        }
+                    });
                 });
-            }
-        })
-
-        
+        });
     });
+
 }
 
 function outputError(message) {
